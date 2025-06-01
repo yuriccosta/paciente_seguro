@@ -28,14 +28,16 @@ set(PICO_BOARD pico_w CACHE STRING "Board type")
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
 
-project(mqtt_client C CXX ASM)
+project(paciente_seguro C CXX ASM)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
+add_executable(paciente_seguro paciente_seguro.c lib/perifericos.c)
 
-add_executable(paciente_seguro paciente_seguro.c)
+# Generate PIO header
+pico_generate_pio_header(paciente_seguro ${CMAKE_CURRENT_LIST_DIR}/lib/animacao_matriz.pio)
 
 pico_set_program_name(paciente_seguro "paciente_seguro")
 pico_set_program_version(paciente_seguro "0.1")
@@ -52,11 +54,15 @@ target_link_libraries(paciente_seguro
     pico_lwip_mqtt
     pico_mbedtls
     pico_lwip_mbedtls
+    hardware_pio
+    hardware_pwm
+    hardware_clocks
     )
 
 # Add the standard include files to the build
 target_include_directories(paciente_seguro PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}
+        ${CMAKE_CURRENT_LIST_DIR}/lib
 )
 
 # Add any user requested libraries

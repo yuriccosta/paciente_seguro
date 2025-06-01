@@ -18,6 +18,14 @@
 #include "lwip/dns.h"               // Biblioteca que fornece funções e recursos suporte DNS:
 #include "lwip/altcp_tls.h"         // Biblioteca que fornece funções e recursos para conexões seguras usando TLS:
 
+#include "credenciais_mqtt.h" // Altere o arquivo de exemplo dentro do lib para suas credenciais e retire example do nome
+#include "perifericos.h"
+float temp_max = 37.0; // Temperatura máxima em graus Celsius
+float temp_min = 35.0; // Temperatura mínima em graus Celsius
+int bpm_max = 100; // Batimento cardíaco máximo
+int bpm_min = 60;  // Batimento cardíaco mínimo
+bool alarme_medico = false; // Variável para controlar o alarme médico
+bool alarme_manual = false; // Variável para controlar o alarme manual
 
 
 // Definição da escala de temperatura
@@ -51,6 +59,9 @@ typedef struct {
     bool stop_client;
 } MQTT_CLIENT_DATA_T;
 
+// Cria registro com os dados do cliente
+static MQTT_CLIENT_DATA_T state;
+
 #ifndef DEBUG_printf
 #ifndef NDEBUG
 #define DEBUG_printf printf
@@ -67,8 +78,8 @@ typedef struct {
 #define ERROR_printf printf
 #endif
 
-// Temporização da coleta de temperatura - how often to measure our temperature
-#define TEMP_WORKER_TIME_S 10
+// Temporização da coleta de saúde - how often to measure our saúde
+#define HEALTH_WORKER_TIME_S 5
 
 // Manter o programa ativo - keep alive in seconds
 #define MQTT_KEEP_ALIVE_S 60
@@ -112,7 +123,7 @@ static const char *full_topic(MQTT_CLIENT_DATA_T *state, const char *name);
 static void control_led(MQTT_CLIENT_DATA_T *state, bool on);
 
 // Publicar temperatura
-static void publish_temperature(MQTT_CLIENT_DATA_T *state);
+static void publish_health(MQTT_CLIENT_DATA_T *state);
 
 // Requisição de Assinatura - subscribe
 static void sub_request_cb(void *arg, err_t err);
@@ -129,9 +140,9 @@ static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t f
 // Dados de entrada publicados
 static void mqtt_incoming_publish_cb(void *arg, const char *topic, u32_t tot_len);
 
-// Publicar temperatura
-static void temperature_worker_fn(async_context_t *context, async_at_time_worker_t *worker);
-static async_at_time_worker_t temperature_worker = { .do_work = temperature_worker_fn };
+// Publicar saúde
+static void health_worker_fn(async_context_t *context, async_at_time_worker_t *worker);
+static async_at_time_worker_t health_worker = { .do_work = health_worker_fn };
 
 // Conexão MQTT
 static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status);
@@ -142,19 +153,27 @@ static void start_client(MQTT_CLIENT_DATA_T *state);
 // Call back com o resultado do DNS
 static void dns_found(const char *hostname, const ip_addr_t *ipaddr, void *arg);
 
+// Interrupção do botão A
+static void alarme_manual_handler(uint gpio, uint32_t events);
+
+
 int main(void) {
 
     // Inicializa todos os tipos de bibliotecas stdio padrão presentes que estão ligados ao binário.
     stdio_init_all();
     INFO_printf("mqtt client starting\n");
 
+    // Inicializa o botão A como botão de alarme manual, atraves de interrupção
+    gpio_init(BOTAO_A);
+    gpio_set_dir(BOTAO_A, GPIO_IN);
+    gpio_pull_up(BOTAO_A); // Configura o botão A com pull-up interno
+    gpio_set_irq_enabled_with_callback(BOTAO_A, GPIO_IRQ_EDGE_FALL, true, &alarme_manual_handler);
+
+
     // Inicializa o conversor ADC
     adc_init();
-    adc_set_temp_sensor_enabled(true);
-    adc_select_input(4);
 
-    // Cria registro com os dados do cliente
-    static MQTT_CLIENT_DATA_T state;
+
 
     // Inicializa a arquitetura do cyw43
     if (cyw43_arch_init()) {
@@ -237,24 +256,74 @@ int main(void) {
     return 0;
 }
 
-/* References for this implementation:
- * raspberry-pi-pico-c-sdk.pdf, Section '4.1.1. hardware_adc'
- * pico-examples/adc/adc_console/adc_console.c */
-static float read_onboard_temperature(const char unit) {
-
-    /* 12-bit conversion, assume max value == ADC_VREF == 3.3 V */
-    const float conversionFactor = 3.3f / (1 << 12);
-
-    float adc = (float)adc_read() * conversionFactor;
-    float tempC = 27.0f - (adc - 0.706f) / 0.001721f;
-
-    if (unit == 'C' || unit != 'F') {
-        return tempC;
-    } else if (unit == 'F') {
-        return tempC * 9 / 5 + 32;
+// Interrupção do botão A
+static void alarme_manual_handler(uint gpio, uint32_t events) {
+    if (gpio == BOTAO_A) {
+        static uint32_t last_press_time = 0;
+        uint32_t current_time = to_ms_since_boot(get_absolute_time());
+        if (current_time - last_press_time > 200) { // Debounce em 200ms
+            alarme_manual = !alarme_manual; // Alterna o estado do alarme manual
+            INFO_printf("Alarme manual %s\n", alarme_manual ? "ativado" : "desativado");
+            
+            // Publica tópico imediatamente
+            const char *alarme_key = full_topic(&state, "/alarme");
+            const char *alarme_msg = alarme_manual ? "1" : "0";
+            if (alarme_manual) {
+                control_led(&state, true); // Liga o LED se o alarme manual estiver ativado
+                iniciar_buzzer(BUZZER_A); // Inicia o buzzer
+                INFO_printf("Publishing alarm status %s to %s\n", alarme_msg, alarme_key);
+                mqtt_publish(state.mqtt_client_inst, alarme_key, alarme_msg, strlen(alarme_msg), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, &state);
+            } else if (!alarme_medico) {
+                control_led(&state, false); // Desliga o LED se o alarme manual estiver desativado
+                parar_buzzer(BUZZER_A); // Para o buzzer
+                INFO_printf("Publishing alarm status %s to %s\n", alarme_msg, alarme_key);
+                mqtt_publish(state.mqtt_client_inst, alarme_key, alarme_msg, strlen(alarme_msg), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, &state);
+            }
+        }
+        last_press_time = current_time;
     }
+}
 
-    return -1.0f;
+// Leitura de temperatura do sensor
+static float read_temperatura() {
+    adc_select_input(1); // SSeleciona o sensor de temperatura
+    uint16_t vrx_value = adc_read(); // Lê o valor do eixo x (Temperatura)
+    return ((vrx_value - 16) / max_value_joy) * 80; // Converte o valor do eixo x para a faixa de 0 a 80
+}
+
+// Leitura de batimento cardíaco do sensor
+static int read_batimento() {
+    adc_select_input(0); // Seleciona o sensor de batimento
+    uint16_t vry_value = adc_read(); // Lê o valor do eixo y (Batimento)
+    return ((vry_value - 16) / max_value_joy) * 80 + 40; // Ajusta o valor do eixo y para a faixa de 40 a 120
+}
+
+// Verifica se há uma condição de alarme
+static bool verifica_condicao_alarme(float temperatura, int batimento) {
+    // Exemplo de condição de alarme: temperatura acima de 37.5 ou batimento fora da faixa de 60 a 100
+    return (temperatura > temp_max || temperatura < temp_min ||
+            batimento < bpm_min || batimento > bpm_max);
+}
+
+static bool gerenciar_alarme(float temperatura, int batimento){
+    
+    if (verifica_condicao_alarme(temperatura, batimento)) {
+        alarme_medico = true; // Ativa o alarme médico
+        INFO_printf("Alarme médico ativado!\n");
+        iniciar_buzzer(BUZZER_A); // Inicia o buzzer
+        return true;
+    } else{
+        alarme_medico = false; // Desativa o alarme médico
+        if (alarme_manual){
+            INFO_printf("Alarme manual ativado!\n");
+            iniciar_buzzer(BUZZER_A); // Inicia o buzzer
+            return true;
+        } else{
+            INFO_printf("Condições normalizadas.\n");
+            parar_buzzer(BUZZER_A); // Para o buzzer
+            return false; // Desativa o alarme
+        }
+    }
 }
 
 // Requisição para publicar
@@ -284,22 +353,44 @@ static void control_led(MQTT_CLIENT_DATA_T *state, bool on) {
     else
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
 
-    mqtt_publish(state->mqtt_client_inst, full_topic(state, "/led/state"), message, strlen(message), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
+    mqtt_publish(state->mqtt_client_inst, full_topic(state, "/alarm/state"), message, strlen(message), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
 }
 
-// Publicar temperatura
-static void publish_temperature(MQTT_CLIENT_DATA_T *state) {
-    static float old_temperature;
-    const char *temperature_key = full_topic(state, "/temperature");
-    float temperature = read_onboard_temperature(TEMPERATURE_UNITS);
-    if (temperature != old_temperature) {
-        old_temperature = temperature;
-        // Publish temperature on /temperature topic
-        char temp_str[16];
-        snprintf(temp_str, sizeof(temp_str), "%.2f", temperature);
-        INFO_printf("Publishing %s to %s\n", temp_str, temperature_key);
-        mqtt_publish(state->mqtt_client_inst, temperature_key, temp_str, strlen(temp_str), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
+// Publicar saúde
+static void publish_health(MQTT_CLIENT_DATA_T *state) {
+
+    const char *temperatura_key = full_topic(state, "/temperatura");
+    float temperatura = read_temperatura();
+
+    // Publish temperatura on /temperatura topic
+    char temp_str[16];
+    snprintf(temp_str, sizeof(temp_str), "%.2f", temperatura);
+    INFO_printf("Publishing %s to %s\n", temp_str, temperatura_key);
+    mqtt_publish(state->mqtt_client_inst, temperatura_key, temp_str, strlen(temp_str), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
+
+
+    static int old_batimento;
+    const char *batimento_key = full_topic(state, "/batimento");
+    int batimento = read_batimento();
+    if (batimento != old_batimento) {
+        old_batimento = batimento;
+        // Publish batimento on /batimento topic
+        char bat_str[16];
+        snprintf(bat_str, sizeof(bat_str), "%.2d", batimento);
+        INFO_printf("Publishing %s to %s\n", bat_str, batimento_key);
+        mqtt_publish(state->mqtt_client_inst, batimento_key, bat_str, strlen(bat_str), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
     }
+
+
+    bool alarme_atual = gerenciar_alarme(temperatura, batimento);
+    const char *alarme_key = full_topic(state, "/alarme");
+    const char *alarme_msg = alarme_atual ? "1" : "0";
+    
+    INFO_printf("Publishing alarm status %s to %s\n", alarme_msg, alarme_key);
+    mqtt_publish(state->mqtt_client_inst, alarme_key, alarme_msg, strlen(alarme_msg), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
+    
+    control_led(state, alarme_atual); // Controla o LED baseado no alarme
+
 }
 
 // Requisição de Assinatura - subscribe
@@ -329,6 +420,8 @@ static void unsub_request_cb(void *arg, err_t err) {
 // Tópicos de assinatura
 static void sub_unsub_topics(MQTT_CLIENT_DATA_T* state, bool sub) {
     mqtt_request_cb_t cb = sub ? sub_request_cb : unsub_request_cb;
+    mqtt_sub_unsub(state->mqtt_client_inst, full_topic(state, "/comando/temperatura"), MQTT_SUBSCRIBE_QOS, cb, state, sub);
+    mqtt_sub_unsub(state->mqtt_client_inst, full_topic(state, "/comando/batimento"), MQTT_SUBSCRIBE_QOS, cb, state, sub);
     mqtt_sub_unsub(state->mqtt_client_inst, full_topic(state, "/led"), MQTT_SUBSCRIBE_QOS, cb, state, sub);
     mqtt_sub_unsub(state->mqtt_client_inst, full_topic(state, "/print"), MQTT_SUBSCRIBE_QOS, cb, state, sub);
     mqtt_sub_unsub(state->mqtt_client_inst, full_topic(state, "/ping"), MQTT_SUBSCRIBE_QOS, cb, state, sub);
@@ -354,6 +447,41 @@ static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t f
             control_led(state, true);
         else if (lwip_stricmp((const char *)state->data, "Off") == 0 || strcmp((const char *)state->data, "0") == 0)
             control_led(state, false);
+    } else if (strcmp(basic_topic, "/comando/batimento") == 0) {
+        char *data_str = (char *)state->data;
+        char *separator = strchr(data_str, ',');
+        if (separator){
+            *separator = '\0'; // Separa a string em dois, pela vírgula
+            int novo_batimento_min = atoi(data_str);
+            int novo_batimento_max = atoi(separator + 1);
+            if (novo_batimento_min < 0 || novo_batimento_max < 0 || novo_batimento_min >= novo_batimento_max) {
+                ERROR_printf("Faixa de batimento inválida: %.2d, %.2d\n", novo_batimento_min, novo_batimento_max);
+            } else {
+                bpm_min = (int)novo_batimento_min;
+                bpm_max = (int)novo_batimento_max;
+                INFO_printf("Faixa de batimento atualizada: %d - %d\n", bpm_min, bpm_max);
+            }
+        } else {
+            ERROR_printf("Formato inválido para batimento: %s\n", state->data);
+        }
+    } else if (strcmp(basic_topic, "/comando/temperatura") == 0) {
+        char *data_str = (char *)state->data;
+        char *separator = strchr(data_str, ',');
+        if (separator) {
+            *separator = '\0'; // Separa a string em dois, pela vírgula
+            float novo_temp_min = atof(data_str);
+            float novo_temp_max = atof(separator + 1);
+            if (novo_temp_min < 0 || novo_temp_max < 0 || novo_temp_min >= novo_temp_max) {
+                ERROR_printf("Faixa de temperatura inválida: %.2f, %.2f\n", novo_temp_min, novo_temp_max);
+            } else {
+                temp_min = novo_temp_min;
+                temp_max = novo_temp_max;
+                INFO_printf("Faixa de temperatura atualizada: %.2f - %.2f\n", temp_min, temp_max);
+            }
+        } else {
+            ERROR_printf("Formato inválido para temperatura: %s\n", state->data);
+        }
+
     } else if (strcmp(basic_topic, "/print") == 0) {
         INFO_printf("%.*s\n", len, data);
     } else if (strcmp(basic_topic, "/ping") == 0) {
@@ -372,11 +500,11 @@ static void mqtt_incoming_publish_cb(void *arg, const char *topic, u32_t tot_len
     strncpy(state->topic, topic, sizeof(state->topic));
 }
 
-// Publicar temperatura
-static void temperature_worker_fn(async_context_t *context, async_at_time_worker_t *worker) {
+// Publicar saúde
+static void health_worker_fn(async_context_t *context, async_at_time_worker_t *worker) {
     MQTT_CLIENT_DATA_T* state = (MQTT_CLIENT_DATA_T*)worker->user_data;
-    publish_temperature(state);
-    async_context_add_at_time_worker_in_ms(context, worker, TEMP_WORKER_TIME_S * 1000);
+    publish_health(state);
+    async_context_add_at_time_worker_in_ms(context, worker, HEALTH_WORKER_TIME_S * 1000);
 }
 
 // Conexão MQTT
@@ -391,9 +519,9 @@ static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection
             mqtt_publish(state->mqtt_client_inst, state->mqtt_client_info.will_topic, "1", 1, MQTT_WILL_QOS, true, pub_request_cb, state);
         }
 
-        // Publish temperature every 10 sec if it's changed
-        temperature_worker.user_data = state;
-        async_context_add_at_time_worker_in_ms(cyw43_arch_async_context(), &temperature_worker, 0);
+        // Publish health data every 10 sec if it's changed
+        health_worker.user_data = state;
+        async_context_add_at_time_worker_in_ms(cyw43_arch_async_context(), &health_worker, 0);
     } else if (status == MQTT_CONNECT_DISCONNECTED) {
         if (!state->connect_done) {
             panic("Failed to connect to mqtt server");
