@@ -1,10 +1,3 @@
- /* AULA IoT - Ricardo Prates - 001 - Cliente MQTT - Publisher:/Temperatura; Subscribed:/led
- *
- * Material de suporte - 27/05/2025
- * 
- * Código adaptado de: https://github.com/raspberrypi/pico-examples/tree/master/pico_w/wifi/mqtt 
- */
-
 #include "pico/stdlib.h"            // Biblioteca da Raspberry Pi Pico para funções padrão (GPIO, temporização, etc.)
 #include "pico/cyw43_arch.h"        // Biblioteca para arquitetura Wi-Fi da Pico com CYW43
 #include "pico/unique_id.h"         // Biblioteca com recursos para trabalhar com os pinos GPIO do Raspberry Pi Pico
@@ -20,6 +13,7 @@
 
 #include "credenciais_mqtt.h" // Altere o arquivo de exemplo dentro do lib para suas credenciais e retire example do nome
 #include "perifericos.h"
+
 float temp_max = 37.0; // Temperatura máxima em graus Celsius
 float temp_min = 35.0; // Temperatura mínima em graus Celsius
 int bpm_max = 100; // Batimento cardíaco máximo
@@ -110,8 +104,6 @@ static MQTT_CLIENT_DATA_T state;
  * raspberry-pi-pico-c-sdk.pdf, Section '4.1.1. hardware_adc'
  * pico-examples/adc/adc_console/adc_console.c */
 
-//Leitura de temperatura do microcotrolador
-static float read_onboard_temperature(const char unit);
 
 // Requisição para publicar
 static void pub_request_cb(__unused void *arg, err_t err);
@@ -119,11 +111,17 @@ static void pub_request_cb(__unused void *arg, err_t err);
 // Topico MQTT
 static const char *full_topic(MQTT_CLIENT_DATA_T *state, const char *name);
 
-// Controle do LED 
-static void control_led(MQTT_CLIENT_DATA_T *state, bool on);
+// Controle do LED
+static void control_led(bool on);
 
 // Publicar temperatura
 static void publish_health(MQTT_CLIENT_DATA_T *state);
+
+// Verifica se há uma condição de alarme
+static bool verifica_condicao_alarme(float temperatura, int batimento);
+
+// Gerencia o alarme médico e manual
+static bool gerenciar_alarme(float temperatura, int batimento);
 
 // Requisição de Assinatura - subscribe
 static void sub_request_cb(void *arg, err_t err);
@@ -163,17 +161,8 @@ int main(void) {
     stdio_init_all();
     INFO_printf("mqtt client starting\n");
 
-    // Inicializa o botão A como botão de alarme manual, atraves de interrupção
-    gpio_init(BOTAO_A);
-    gpio_set_dir(BOTAO_A, GPIO_IN);
-    gpio_pull_up(BOTAO_A); // Configura o botão A com pull-up interno
-    gpio_set_irq_enabled_with_callback(BOTAO_A, GPIO_IRQ_EDGE_FALL, true, &alarme_manual_handler);
-
-
     // Inicializa o conversor ADC
     adc_init();
-
-
 
     // Inicializa a arquitetura do cyw43
     if (cyw43_arch_init()) {
@@ -246,6 +235,19 @@ int main(void) {
         panic("dns request failed");
     }
 
+    // Inicializa o botão A como botão de alarme manual, atraves de interrupção
+    gpio_init(BOTAO_A);
+    gpio_set_dir(BOTAO_A, GPIO_IN);
+    gpio_pull_up(BOTAO_A); // Configura o botão A com pull-up interno
+    gpio_set_irq_enabled_with_callback(BOTAO_A, GPIO_IRQ_EDGE_FALL, true, &alarme_manual_handler);
+
+
+    // Configura o led vermelho e o verde
+    gpio_init(LED_PIN_RED);
+    gpio_set_dir(LED_PIN_RED, GPIO_OUT);
+    gpio_init(LED_PIN_GREEN);
+    gpio_set_dir(LED_PIN_GREEN, GPIO_OUT);
+
     // Loop condicionado a conexão mqtt
     while (!state.connect_done || mqtt_client_is_connected(state.mqtt_client_inst)) {
         cyw43_arch_poll();
@@ -269,12 +271,12 @@ static void alarme_manual_handler(uint gpio, uint32_t events) {
             const char *alarme_key = full_topic(&state, "/alarme");
             const char *alarme_msg = alarme_manual ? "1" : "0";
             if (alarme_manual) {
-                control_led(&state, true); // Liga o LED se o alarme manual estiver ativado
+                control_led(true); // Liga o LED se o alarme manual estiver ativado
                 iniciar_buzzer(BUZZER_A); // Inicia o buzzer
                 INFO_printf("Publishing alarm status %s to %s\n", alarme_msg, alarme_key);
                 mqtt_publish(state.mqtt_client_inst, alarme_key, alarme_msg, strlen(alarme_msg), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, &state);
             } else if (!alarme_medico) {
-                control_led(&state, false); // Desliga o LED se o alarme manual estiver desativado
+                control_led(false); // Desliga o LED se o alarme manual estiver desativado
                 parar_buzzer(BUZZER_A); // Para o buzzer
                 INFO_printf("Publishing alarm status %s to %s\n", alarme_msg, alarme_key);
                 mqtt_publish(state.mqtt_client_inst, alarme_key, alarme_msg, strlen(alarme_msg), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, &state);
@@ -288,7 +290,7 @@ static void alarme_manual_handler(uint gpio, uint32_t events) {
 static float read_temperatura() {
     adc_select_input(1); // SSeleciona o sensor de temperatura
     uint16_t vrx_value = adc_read(); // Lê o valor do eixo x (Temperatura)
-    return ((vrx_value - 16) / max_value_joy) * 80; // Converte o valor do eixo x para a faixa de 0 a 80
+    return ((vrx_value - 16) / max_value_joy) * 20 + 26; // Converte o valor do eixo x para a faixa de 26 a 46
 }
 
 // Leitura de batimento cardíaco do sensor
@@ -305,22 +307,26 @@ static bool verifica_condicao_alarme(float temperatura, int batimento) {
             batimento < bpm_min || batimento > bpm_max);
 }
 
+// Gerencia o alarme médico e manual
 static bool gerenciar_alarme(float temperatura, int batimento){
     
     if (verifica_condicao_alarme(temperatura, batimento)) {
         alarme_medico = true; // Ativa o alarme médico
         INFO_printf("Alarme médico ativado!\n");
         iniciar_buzzer(BUZZER_A); // Inicia o buzzer
+        control_led(true); // Liga o LED vermelho
         return true;
     } else{
         alarme_medico = false; // Desativa o alarme médico
         if (alarme_manual){
             INFO_printf("Alarme manual ativado!\n");
             iniciar_buzzer(BUZZER_A); // Inicia o buzzer
+            control_led(true); // Liga o LED vermelho
             return true;
         } else{
             INFO_printf("Condições normalizadas.\n");
             parar_buzzer(BUZZER_A); // Para o buzzer
+            control_led(false); // Liga o LED verde
             return false; // Desativa o alarme
         }
     }
@@ -344,16 +350,19 @@ static const char *full_topic(MQTT_CLIENT_DATA_T *state, const char *name) {
 #endif
 }
 
-// Controle do LED 
-static void control_led(MQTT_CLIENT_DATA_T *state, bool on) {
-    // Publish state on /state topic and on/off led board
-    const char* message = on ? "On" : "Off";
-    if (on)
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
-    else
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+// Controle do LED
+static void control_led(bool on) {
+    if (on){
+        gpio_put(LED_PIN_RED, 1); // Liga o LED vermelho
+        gpio_put(LED_PIN_GREEN, 0); // Desliga o LED verde
+        INFO_printf("LED vermelho ligado\n");
+    } else {
+        gpio_put(LED_PIN_RED, 0); // Desliga o LED vermelho
+        gpio_put(LED_PIN_GREEN, 1); // Liga o LED verde
+        INFO_printf("LED verde ligado\n");
+    }
 
-    mqtt_publish(state->mqtt_client_inst, full_topic(state, "/alarm/state"), message, strlen(message), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
+    //mqtt_publish(state->mqtt_client_inst, full_topic(state, "/alarm/state"), message, strlen(message), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
 }
 
 // Publicar saúde
@@ -388,9 +397,6 @@ static void publish_health(MQTT_CLIENT_DATA_T *state) {
     
     INFO_printf("Publishing alarm status %s to %s\n", alarme_msg, alarme_key);
     mqtt_publish(state->mqtt_client_inst, alarme_key, alarme_msg, strlen(alarme_msg), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
-    
-    control_led(state, alarme_atual); // Controla o LED baseado no alarme
-
 }
 
 // Requisição de Assinatura - subscribe
@@ -441,13 +447,7 @@ static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t f
     state->data[len] = '\0';
 
     DEBUG_printf("Topic: %s, Message: %s\n", state->topic, state->data);
-    if (strcmp(basic_topic, "/led") == 0)
-    {
-        if (lwip_stricmp((const char *)state->data, "On") == 0 || strcmp((const char *)state->data, "1") == 0)
-            control_led(state, true);
-        else if (lwip_stricmp((const char *)state->data, "Off") == 0 || strcmp((const char *)state->data, "0") == 0)
-            control_led(state, false);
-    } else if (strcmp(basic_topic, "/comando/batimento") == 0) {
+    if (strcmp(basic_topic, "/comando/batimento") == 0) {
         char *data_str = (char *)state->data;
         char *separator = strchr(data_str, ',');
         if (separator){
