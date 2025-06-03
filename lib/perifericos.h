@@ -1,7 +1,10 @@
 #include <hardware/pio.h>           
 #include "hardware/clocks.h" 
 #include "hardware/pwm.h"
+#include "hardware/i2c.h" // Biblioteca de hardware para I2C
+#include "stdio.h"
 #include "animacao_matriz.pio.h" // Biblioteca PIO para controle de LEDs WS2818B
+#include "ssd1306.h" // Biblioteca para controle do display OLED
 
 
 // Definição de constantes
@@ -17,9 +20,15 @@
 #define JOY_Y 26
 #define max_value_joy 4065.0 // (4081 - 16) que são os valores extremos máximos lidos pelo meu joystick
 
+#define I2C_PORT i2c1
+#define I2C_SDA 14
+#define I2C_SCL 15
+#define ENDERECO 0x3C
+
 
 // Cabeçalho para funções de controle de periféricos
-void display_desenho(int number);
+void init_ssd();
+void display_info(float temperatura, int batimento);
 void pwm_setup(uint pino);
 void iniciar_buzzer(uint pin);
 void parar_buzzer(uint pin);

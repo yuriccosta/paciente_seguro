@@ -34,7 +34,7 @@ project(paciente_seguro C CXX ASM)
 pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
-add_executable(paciente_seguro paciente_seguro.c lib/perifericos.c)
+add_executable(paciente_seguro paciente_seguro.c lib/perifericos.c lib/ssd1306.c)
 
 # Generate PIO header
 pico_generate_pio_header(paciente_seguro ${CMAKE_CURRENT_LIST_DIR}/lib/animacao_matriz.pio)
@@ -57,6 +57,7 @@ target_link_libraries(paciente_seguro
     hardware_pio
     hardware_pwm
     hardware_clocks
+    hardware_i2c
     )
 
 # Add the standard include files to the build

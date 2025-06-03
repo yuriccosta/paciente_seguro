@@ -1,58 +1,54 @@
 #include "perifericos.h"
 
 // Declaração de variáveis globais
-PIO pio;
-uint sm;
+ssd1306_t ssd;
 
 
-// Declaração de matriz de LEDs
-uint padrao_led[10][LED_COUNT] = {
-    {0, 0, 1, 0, 0,
-     0, 1, 1, 1, 0,
-     1, 1, 1, 1, 1,
-     1, 1, 1, 1, 1,
-     0, 1, 1, 1, 0,
-    }, 
-    {2, 0, 2, 0, 2,
-     0, 2, 2, 2, 0,
-     2, 2, 2, 2, 2,
-     0, 2, 2, 2, 0,
-     2, 0, 2, 0, 2,
-    }, 
-    {0, 0, 0, 0, 0,
-     0, 0, 0, 0, 0,
-     0, 0, 0, 0, 0,
-     0, 0, 0, 0, 0,
-     0, 0, 0, 0, 0,
-    } // Desliga os LEDs
-};
-
-// Ordem da matriz de LEDS, útil para poder visualizar na matriz do código e escrever na ordem correta do hardware
-int ordem[LED_COUNT] = {0, 1, 2, 3, 4, 9, 8, 7, 6, 5, 10, 11, 12, 13, 14, 19, 18, 17, 16, 15, 20, 21, 22, 23, 24};
-
-
-// Rotina para definição da intensidade de cores do led
-static uint32_t matrix_rgb(unsigned r, unsigned g, unsigned b){
-    return (g << 24) | (r << 16) | (b << 8);
+void init_ssd(){
+    // Inicialização do display
+    i2c_init(I2C_PORT, 400 * 1000);
+    gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
+    gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
+    gpio_pull_up(I2C_SDA);
+    gpio_pull_up(I2C_SCL);
+    ssd1306_init(&ssd, WIDTH, HEIGHT, false, ENDERECO, I2C_PORT);
+    ssd1306_config(&ssd);
+    ssd1306_send_data(&ssd);
 }
 
-// Rotina para desenhar o padrão de LED
-void display_desenho(int number){
-    uint32_t valor_led;
+void display_info(float temperatura, int batimento) {
+    char buffer[32]; // Buffer para formatação de strings
+    
+    ssd1306_fill(&ssd, 1);
 
-    for (int i = 0; i < LED_COUNT; i++){
-        // Define a cor do LED de acordo com o padrão
-        if (padrao_led[number][ordem[24 - i]] == 1){
-            valor_led = matrix_rgb(0, 0, 10); // Azul
-        } else if (padrao_led[number][ordem[24 - i]] == 2){
-            valor_led = matrix_rgb(30, 10, 0); // Amarelo
-        } else{
-            valor_led = matrix_rgb(0, 0, 0); // Desliga o LED
-        }
-        // Atualiza o LED
-        pio_sm_put_blocking(pio, sm, valor_led);
-    }
+    // Borda do display
+    ssd1306_rect(&ssd, 3, 3, 122, 58, false, true);
+
+    // Título do sistema
+    ssd1306_draw_string(&ssd, "Paciente", 32, 6);
+    ssd1306_draw_string(&ssd, "Seguro", 38, 16);
+    
+    // Linha divisória
+    ssd1306_hline(&ssd, 8, 119, 26, true);
+    
+    // Exibir temperatura
+    sprintf(buffer, "Temp: %.1f C", temperatura);
+    ssd1306_draw_string(&ssd, buffer, 8, 32);
+    
+    // Exibir batimento
+    sprintf(buffer, "BPM: %d", batimento);
+    ssd1306_draw_string(&ssd, buffer, 8, 42);
+
+    // Cruz médica
+    // Barra vertical da cruz (3 pixels de largura)
+    ssd1306_rect(&ssd, 6, 112, 3, 12, true, true);
+    
+    // Barra horizontal da cruz (3 pixels de altura)
+    ssd1306_rect(&ssd, 10, 108, 11, 3, true, true);
+
+    ssd1306_send_data(&ssd);
 }
+
 
 // Configuração do PWM
 void pwm_setup(uint pino) {

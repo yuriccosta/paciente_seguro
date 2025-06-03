@@ -114,6 +114,12 @@ static const char *full_topic(MQTT_CLIENT_DATA_T *state, const char *name);
 // Controle do LED
 static void control_led(bool on);
 
+// Leitura de temperatura do sensor
+static float read_temperatura();
+
+// Leitura de batimento cardíaco do sensor
+static int read_batimento();
+
 // Publicar temperatura
 static void publish_health(MQTT_CLIENT_DATA_T *state);
 
@@ -248,8 +254,12 @@ int main(void) {
     gpio_init(LED_PIN_GREEN);
     gpio_set_dir(LED_PIN_GREEN, GPIO_OUT);
 
+    // Inicializa o display
+    init_ssd();
+
     // Loop condicionado a conexão mqtt
     while (!state.connect_done || mqtt_client_is_connected(state.mqtt_client_inst)) {
+        display_info(read_temperatura(), read_batimento());
         cyw43_arch_poll();
         cyw43_arch_wait_for_work_until(make_timeout_time_ms(10000));
     }
