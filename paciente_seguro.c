@@ -15,17 +15,12 @@
 #include "perifericos.h"
 
 float temp_max = 37.0; // Temperatura máxima em graus Celsius
-float temp_min = 35.0; // Temperatura mínima em graus Celsius
+float temp_min = 34.0; // Temperatura mínima em graus Celsius
 int bpm_max = 100; // Batimento cardíaco máximo
 int bpm_min = 60;  // Batimento cardíaco mínimo
 bool alarme_medico = false; // Variável para controlar o alarme médico
 bool alarme_manual = false; // Variável para controlar o alarme manual
 
-
-// Definição da escala de temperatura
-#ifndef TEMPERATURE_UNITS
-#define TEMPERATURE_UNITS 'C' // Set to 'F' for Fahrenheit
-#endif
 
 #ifndef MQTT_SERVER
 #error Need to define MQTT_SERVER
@@ -72,7 +67,7 @@ static MQTT_CLIENT_DATA_T state;
 #define ERROR_printf printf
 #endif
 
-// Temporização da coleta de saúde - how often to measure our saúde
+// Temporização da coleta de saúde - how often to measure our health
 #define HEALTH_WORKER_TIME_S 5
 
 // Manter o programa ativo - keep alive in seconds
@@ -259,7 +254,7 @@ int main(void) {
 
     // Loop condicionado a conexão mqtt
     while (!state.connect_done || mqtt_client_is_connected(state.mqtt_client_inst)) {
-        display_info(read_temperatura(), read_batimento());
+        display_info(read_temperatura(), read_batimento()); // Exibe informações no display
         cyw43_arch_poll();
         cyw43_arch_wait_for_work_until(make_timeout_time_ms(10000));
     }
@@ -438,7 +433,6 @@ static void sub_unsub_topics(MQTT_CLIENT_DATA_T* state, bool sub) {
     mqtt_request_cb_t cb = sub ? sub_request_cb : unsub_request_cb;
     mqtt_sub_unsub(state->mqtt_client_inst, full_topic(state, "/comando/temperatura"), MQTT_SUBSCRIBE_QOS, cb, state, sub);
     mqtt_sub_unsub(state->mqtt_client_inst, full_topic(state, "/comando/batimento"), MQTT_SUBSCRIBE_QOS, cb, state, sub);
-    mqtt_sub_unsub(state->mqtt_client_inst, full_topic(state, "/led"), MQTT_SUBSCRIBE_QOS, cb, state, sub);
     mqtt_sub_unsub(state->mqtt_client_inst, full_topic(state, "/print"), MQTT_SUBSCRIBE_QOS, cb, state, sub);
     mqtt_sub_unsub(state->mqtt_client_inst, full_topic(state, "/ping"), MQTT_SUBSCRIBE_QOS, cb, state, sub);
     mqtt_sub_unsub(state->mqtt_client_inst, full_topic(state, "/exit"), MQTT_SUBSCRIBE_QOS, cb, state, sub);

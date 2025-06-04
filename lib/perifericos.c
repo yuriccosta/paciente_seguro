@@ -3,7 +3,7 @@
 // Declaração de variáveis globais
 ssd1306_t ssd;
 
-
+// Inicialização do display OLED SSD1306
 void init_ssd(){
     // Inicialização do display
     i2c_init(I2C_PORT, 400 * 1000);
@@ -16,6 +16,7 @@ void init_ssd(){
     ssd1306_send_data(&ssd);
 }
 
+// Mostra informações no display OLED
 void display_info(float temperatura, int batimento) {
     char buffer[32]; // Buffer para formatação de strings
     

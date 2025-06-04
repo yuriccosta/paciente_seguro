@@ -36,9 +36,6 @@ pico_sdk_init()
 # Add executable. Default name is the project name, version 0.1
 add_executable(paciente_seguro paciente_seguro.c lib/perifericos.c lib/ssd1306.c)
 
-# Generate PIO header
-pico_generate_pio_header(paciente_seguro ${CMAKE_CURRENT_LIST_DIR}/lib/animacao_matriz.pio)
-
 pico_set_program_name(paciente_seguro "paciente_seguro")
 pico_set_program_version(paciente_seguro "0.1")
 

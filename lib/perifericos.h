@@ -3,7 +3,6 @@
 #include "hardware/pwm.h"
 #include "hardware/i2c.h" // Biblioteca de hardware para I2C
 #include "stdio.h"
-#include "animacao_matriz.pio.h" // Biblioteca PIO para controle de LEDs WS2818B
 #include "ssd1306.h" // Biblioteca para controle do display OLED
 
 
