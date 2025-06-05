@@ -275,6 +275,7 @@ static void alarme_manual_handler(uint gpio, uint32_t events) {
             // Publica tópico imediatamente
             const char *alarme_key = full_topic(&state, "/alarme");
             const char *alarme_msg = alarme_manual ? "1" : "0";
+
             if (alarme_manual) {
                 control_led(true); // Liga o LED se o alarme manual estiver ativado
                 iniciar_buzzer(BUZZER_A); // Inicia o buzzer
@@ -314,7 +315,7 @@ static bool verifica_condicao_alarme(float temperatura, int batimento) {
 
 // Gerencia o alarme médico e manual
 static bool gerenciar_alarme(float temperatura, int batimento){
-    
+
     if (verifica_condicao_alarme(temperatura, batimento)) {
         alarme_medico = true; // Ativa o alarme médico
         INFO_printf("Alarme médico ativado!\n");
@@ -382,10 +383,10 @@ static void publish_health(MQTT_CLIENT_DATA_T *state) {
     INFO_printf("Publishing %s to %s\n", temp_str, temperatura_key);
     mqtt_publish(state->mqtt_client_inst, temperatura_key, temp_str, strlen(temp_str), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
 
-
     static int old_batimento;
     const char *batimento_key = full_topic(state, "/batimento");
     int batimento = read_batimento();
+    // Verifica se o batimento mudou
     if (batimento != old_batimento) {
         old_batimento = batimento;
         // Publish batimento on /batimento topic
@@ -395,7 +396,8 @@ static void publish_health(MQTT_CLIENT_DATA_T *state) {
         mqtt_publish(state->mqtt_client_inst, batimento_key, bat_str, strlen(bat_str), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
     }
 
-
+    // Verifica se há uma condição de alarme e publica o status do alarme
+    // Se o alarme médico estiver ativo, o alarme manual será ignorado
     bool alarme_atual = gerenciar_alarme(temperatura, batimento);
     const char *alarme_key = full_topic(state, "/alarme");
     const char *alarme_msg = alarme_atual ? "1" : "0";
@@ -456,8 +458,8 @@ static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t f
         char *separator = strchr(data_str, ',');
         if (separator){
             *separator = '\0'; // Separa a string em dois, pela vírgula
-            int novo_batimento_min = atoi(data_str);
-            int novo_batimento_max = atoi(separator + 1);
+            int novo_batimento_min = atoi(data_str); // Converte a parte antes da vírgula para inteiro
+            int novo_batimento_max = atoi(separator + 1); // Converte a parte depois da vírgula para inteiro
             if (novo_batimento_min < 0 || novo_batimento_max < 0 || novo_batimento_min >= novo_batimento_max) {
                 ERROR_printf("Faixa de batimento inválida: %.2d, %.2d\n", novo_batimento_min, novo_batimento_max);
             } else {
@@ -473,8 +475,8 @@ static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t f
         char *separator = strchr(data_str, ',');
         if (separator) {
             *separator = '\0'; // Separa a string em dois, pela vírgula
-            float novo_temp_min = atof(data_str);
-            float novo_temp_max = atof(separator + 1);
+            float novo_temp_min = atof(data_str); // Converte a parte antes da vírgula para float
+            float novo_temp_max = atof(separator + 1); // Converte a parte depois da vírgula para float
             if (novo_temp_min < 0 || novo_temp_max < 0 || novo_temp_min >= novo_temp_max) {
                 ERROR_printf("Faixa de temperatura inválida: %.2f, %.2f\n", novo_temp_min, novo_temp_max);
             } else {
